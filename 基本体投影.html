@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>土木工程制图 - 三维基本体与三视图教学 (最终修订版)</title>
+    <style>
+        body { font-family: 'Microsoft YaHei', sans-serif; margin: 0; padding: 0; background-color: #f0f2f5; color: #333; display: flex; height: 100vh; overflow: hidden; }
+        #controls-panel { width: 320px; padding: 20px; background-color: #fff; box-shadow: 2px 0 5px rgba(0,0,0,0.1); overflow-y: auto; height: 100%; box-sizing: border-box; z-index: 10; }
+        #main-content { flex-grow: 1; display: flex; height: 100vh; }
+        #scene-3d-container, #scene-2d-container { position: relative; border: 1px solid #ddd; }
+        #scene-3d-container { background-color: #e9eef2; }
+        #scene-2d-container { background-color: #ffffff; }
+        .canvas-title { position: absolute; top: 10px; left: 10px; margin: 0; color: #555; font-size: 16px; z-index: 5; background: rgba(255,255,255,0.8); padding: 5px; border-radius: 3px; }
+        #resizer { width: 5px; background-color: #ddd; cursor: ew-resize; position: relative; }
+        #resizer:hover { background-color: #bbb; }
+        .draggable-label { position: absolute; background: rgba(255,255,255,0.9); padding: 2px 6px; border: 1px solid #ccc; border-radius: 3px; cursor: move; font-weight: bold; font-size: 14px; z-index: 10; }
+        h1, h2 { color: #0056b3; border-bottom: 2px solid #0056b3; padding-bottom: 5px; margin-top: 0; }
+        h2 { font-size: 1.2em; margin-top: 20px; }
+        .control-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, input[type="number"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; transition: background-color: 0.3s; }
+        button:hover { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .dimension-inputs div { margin-bottom: 10px; }
+
+        @media (max-width: 900px) { body { flex-direction: column; height: auto; overflow: auto; } #controls-panel { width: 100%; height: auto; } #main-content { height: auto; flex-direction: column; } #scene-3d-container, #scene-2d-container { height: 50vh; } #resizer { display: none; } }
+    </style>
+</head>
+<body>
+
+    <div id="controls-panel">
+        <h1>参数控制面板</h1>
+        <h2>1. 选择基本体</h2>
+        <div class="control-group">
+            <label for="shape-type">基本体类型:</label>
+            <select id="shape-type">
+                <option value="cylinder">圆柱体</option>
+                <option value="cone">圆锥体</option>
+                <option value="cuboid">长方体</option>
+                <option value="prism">棱柱体</option>
+                <option value="pyramid">棱锥体</option>
+                <option value="sphere">球体</option>
+                <option value="frustum">圆台</option>
+                <option value="pyramidFrustum">棱台体</option>
+            </select>
+        </div>
+        <h2>2. 输入尺寸 (cm)</h2>
+        <div id="dimension-inputs" class="control-group"></div>
+        <h2>3. 操作</h2>
+        <div class="control-group">
+            <button id="generate-btn">生成模型与投影</button>
+            <button id="rotate-body-btn" class="secondary" disabled>切换到"仅旋转物体"模式</button>
+            <button id="reset-view-btn" class="secondary" disabled>复位视图</button>
+        </div>
+        <h2>4. 视图信息</h2>
+        <div id="info-panel" style="font-size: 0.9em; color: #555;">
+            <p>右侧为第一角投影法视图。</p>
+            <p><b>V</b>: 主视图 (从前向后看)</p>
+            <p><b>H</b>: 俯视图 (从上向下看)</p>
+            <p><b>W</b>: 左视图 (从左向右看)</p>
+        </div>
+    </div>
+
+    <div id="main-content">
+        <div id="scene-3d-container">
+            <h3 class="canvas-title">三维正等轴测图</h3>
+        </div>
+        <div id="resizer"></div>
+        <div id="scene-2d-container">
+            <h3 class="canvas-title">俯视图 (H) / 主视图 (V) / 左视图 (W) 投影区</h3>
+            <div class="draggable-label" id="label-v">W</div>
+            <div class="draggable-label" id="label-h">H</div>
+            <div class="draggable-label" id="label-w">V</div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.165.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+        let scene3D, camera3D, renderer3D, controls3D;
+        let scene2D, camera2D, renderer2D;
+        let currentModelGroup, coordinateSystem, projectionsGroup2D, projectionLinesGroup3D;
+        let isModelOnlyRotation = false;
+        const modelDragControls = { isDragging: false, previousMousePosition: { x: 0, y: 0 } };
+
+        const solidLineMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
+        const dashedLineMaterial = new THREE.LineDashedMaterial({ 
+            color: 0x555555, 
+            dashSize: 3, 
+            gapSize: 2,
+            linewidth: 1
+        });
+        const centerLineMaterial = new THREE.LineDashedMaterial({ color: 0xff0000, dashSize: 12, gapSize: 4 });
+        const projectionLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 });
+        const projected3DSolidMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
+        const projected3DDashedMaterial = new THREE.LineDashedMaterial({ 
+            color: 0x555555, 
+            dashSize: 3, 
+            gapSize: 2
+        });
+
+        let loadedFont = null;
+
+        const container3D = document.getElementById('scene-3d-container');
+        const container2D = document.getElementById('scene-2d-container');
+        const resizer = document.getElementById('resizer');
+
+        function init() {
+            new FontLoader().load('https://unpkg.com/three@0.165.0/examples/fonts/helvetiker_regular.typeface.json', (font) => { 
+                loadedFont = font;
+                if (coordinateSystem) {
+                    scene3D.remove(coordinateSystem);
+                    createCoordinateSystem();
+                }
+            });
+            
+            setupResizer();
+            setupDraggableLabels();
+            
+            scene3D = new THREE.Scene();
+            scene3D.background = new THREE.Color(0xf0f2f5);
+            const aspect = container3D.clientWidth / container3D.clientHeight;
+            const frustumSize = 150;
+            camera3D = new THREE.OrthographicCamera(frustumSize * aspect / -2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / -2, 1, 1000);
+            camera3D.position.set(100, 100, 100);
+            camera3D.lookAt(scene3D.position);
+            renderer3D = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer3D.setSize(container3D.clientWidth, container3D.clientHeight);
+            container3D.appendChild(renderer3D.domElement);
+            controls3D = new OrbitControls(camera3D, renderer3D.domElement);
+            controls3D.saveState(); // Save the initial state for reset
+            controls3D.addEventListener('change', () => {
+                render();
+                if (!isModelOnlyRotation && currentModelGroup) {
+                    generate3DProjections();
+                    generate2DProjections();
+                }
+            });
+
+            scene2D = new THREE.Scene();
+            scene2D.background = new THREE.Color(0xffffff);
+            const aspect2D = container2D.clientWidth / container2D.clientHeight;
+            const frustumSize2D = calculateOptimal2DFrustumSize();
+            camera2D = new THREE.OrthographicCamera(frustumSize2D * aspect2D / -2, frustumSize2D * aspect2D / 2, frustumSize2D / 2, frustumSize2D / -2, 1, 1000);
+            camera2D.position.set(0, 0, 100);
+            renderer2D = new THREE.WebGLRenderer({ antialias: true });
+            renderer2D.setSize(container2D.clientWidth, container2D.clientHeight);
+            container2D.appendChild(renderer2D.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene3D.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.position.set(1, 1.5, 1);
+            scene3D.add(directionalLight);
+
+            createCoordinateSystem();
+            setupUI();
+            animate();
+            updateDimensionInputs();
+        }
+
+        function setupDraggableLabels() {
+            const labels = ['label-v', 'label-h', 'label-w'];
+            labels.forEach(labelId => {
+                const label = document.getElementById(labelId);
+                let isDragging = false;
+                let startX, startY, startLeft, startTop;
+
+                label.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    startX = e.clientX;
+                    startY = e.clientY;
+                    startLeft = parseInt(label.style.left || 0);
+                    startTop = parseInt(label.style.top || 0);
+                    e.preventDefault();
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    const deltaX = e.clientX - startX;
+                    const deltaY = e.clientY - startY;
+                    label.style.left = (startLeft + deltaX) + 'px';
+                    label.style.top = (startTop + deltaY) + 'px';
+                });
+
+                document.addEventListener('mouseup', () => {
+                    isDragging = false;
+                });
+            });
+        }
+
+        function updateLabelPositions() {
+            if (!projectionsGroup2D || projectionsGroup2D.children.length < 3) return;
+        
+            const canvasRect = renderer2D.domElement.getBoundingClientRect();
+        
+            // Identify the view groups based on their order in the main group
+            const originalW_view_group = projectionsGroup2D.children[0]; // This is the Left view (W), its label is now V
+            const originalH_view_group = projectionsGroup2D.children[1]; // This is the Top view (H)
+            const originalV_view_group = projectionsGroup2D.children[2]; // This is the Front view (V), its label is now W
+        
+            // Get the labels from the DOM
+            const labelV = document.getElementById('label-w'); // The V label
+            const labelH = document.getElementById('label-h'); // The H label
+            const labelW = document.getElementById('label-v'); // The W label
+        
+            // Calculate bounding boxes in world space
+            const bboxW_orig = new THREE.Box3().setFromObject(originalW_view_group, true);
+            const bboxH_orig = new THREE.Box3().setFromObject(originalH_view_group, true);
+            const bboxV_orig = new THREE.Box3().setFromObject(originalV_view_group, true);
+        
+            // Define anchor points in world space
+            // For V label (on top of original W view), place above
+            const anchorV_world = new THREE.Vector3((bboxW_orig.min.x + bboxW_orig.max.x) / 2, bboxW_orig.max.y, 0);
+            // For H label, place below
+            const anchorH_world = new THREE.Vector3((bboxH_orig.min.x + bboxH_orig.max.x) / 2, bboxH_orig.min.y, 0);
+            // For W label (on top of original V view), place above
+            const anchorW_world = new THREE.Vector3((bboxV_orig.min.x + bboxV_orig.max.x) / 2, bboxV_orig.max.y, 0);
+        
+            // Convert world anchors to screen coordinates
+            const screenV = worldToScreen(anchorV_world, canvasRect);
+            const screenH = worldToScreen(anchorH_world, canvasRect);
+            const screenW = worldToScreen(anchorW_world, canvasRect);
+        
+            const verticalOffsetAbove = 25;
+            const verticalOffsetBelow = 10;
+        
+            // Position V label
+            labelV.style.left = (screenV.x - labelV.offsetWidth / 2) + 'px';
+            labelV.style.top = (screenV.y - verticalOffsetAbove) + 'px';
+        
+            // Position H label
+            labelH.style.left = (screenH.x - labelH.offsetWidth / 2) + 'px';
+            labelH.style.top = (screenH.y + verticalOffsetBelow) + 'px';
+        
+            // Position W label
+            labelW.style.left = (screenW.x - labelW.offsetWidth / 2) + 'px';
+            labelW.style.top = (screenW.y - verticalOffsetAbove) + 'px';
+        }
+
+        function worldToScreen(worldPos, canvasRect) {
+            const vector = worldPos.clone();
+            vector.project(camera2D);
+            
+            const x = (vector.x + 1) * canvasRect.width / 2;
+            const y = (-vector.y + 1) * canvasRect.height / 2;
+            
+            return { x, y };
+        }
+
+        function setupResizer() {
+            let isResizing = false;
+            let startX, startWidth3D, startWidth2D;
+
+            container3D.style.width = '50%';
+            container2D.style.width = '50%';
+
+            resizer.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                startX = e.clientX;
+                startWidth3D = container3D.offsetWidth;
+                startWidth2D = container2D.offsetWidth;
+                document.body.style.cursor = 'ew-resize';
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                
+                const deltaX = e.clientX - startX;
+                const totalWidth = startWidth3D + startWidth2D;
+                const newWidth3D = Math.max(200, Math.min(totalWidth - 200, startWidth3D + deltaX));
+                const newWidth2D = totalWidth - newWidth3D;
+                
+                container3D.style.width = newWidth3D + 'px';
+                container2D.style.width = newWidth2D + 'px';
+                
+                updateRendererSizes();
+            });
+
+
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = 'default';
+                }
+            });
+        }
+
+        function updateRendererSizes() {
+            const aspect3D = container3D.clientWidth / container3D.clientHeight;
+            camera3D.left = -150 * aspect3D / 2;
+            camera3D.right = 150 * aspect3D / 2;
+            camera3D.updateProjectionMatrix();
+            renderer3D.setSize(container3D.clientWidth, container3D.clientHeight);
+            
+            const aspect2D = container2D.clientWidth / container2D.clientHeight;
+            const frustumSize2D = calculateOptimal2DFrustumSize();
+            camera2D.left = -frustumSize2D * aspect2D / 2;
+            camera2D.right = frustumSize2D * aspect2D / 2;
+            camera2D.top = frustumSize2D / 2;
+            camera2D.bottom = -frustumSize2D / 2;
+            camera2D.updateProjectionMatrix();
+            renderer2D.setSize(container2D.clientWidth, container2D.clientHeight);
+            
+            if (currentModelGroup) {
+                generate2DProjections();
+            }
+
+            render();
+            updateLabelPositions();
+        }
+
+        function calculateOptimal2DFrustumSize() {
+            const width = container2D.clientWidth;
+            const height = container2D.clientHeight;
+            const minDimension = Math.min(width, height);
+            return Math.max(300, minDimension * 0.8);
+        }
+
+        function createCoordinateSystem() {
+            const size = 100;
+            const planeDist = 80;
+            coordinateSystem = new THREE.Group();
+            const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.1, side: THREE.DoubleSide });
+            
+            const planeH = new THREE.Mesh(new THREE.PlaneGeometry(size, size), planeMaterial); 
+            planeH.rotation.x = -Math.PI / 2; 
+            planeH.position.y = -planeDist; 
+            coordinateSystem.add(planeH);
+            
+            const planeV = new THREE.Mesh(new THREE.PlaneGeometry(size, size), planeMaterial); 
+            planeV.rotation.y = Math.PI / 2; 
+            planeV.position.x = -planeDist; 
+            coordinateSystem.add(planeV);
+            
+            const planeW = new THREE.Mesh(new THREE.PlaneGeometry(size, size), planeMaterial); 
+            planeW.position.z = -planeDist; 
+            coordinateSystem.add(planeW);
+            
+            coordinateSystem.add(new THREE.AxesHelper(size / 2 + 20));
+            
+            add3DPlaneLabels(coordinateSystem, planeDist);
+            
+            scene3D.add(coordinateSystem);
+        }
+
+        function add3DPlaneLabels(coordinateSystem, planeDist) {
+            if (!loadedFont) return;
+            const textMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+            const createLabel = (text, pos, rotation) => {
+                const geom = new TextGeometry(text, { font: loadedFont, size: 8, depth: 0.1 });
+                geom.center();
+                const mesh = new THREE.Mesh(geom, textMaterial);
+                mesh.position.copy(pos);
+                if (rotation) mesh.rotation.copy(rotation);
+                return mesh;
+            };
+            
+            coordinateSystem.add(createLabel('H', new THREE.Vector3(30, -planeDist + 0.1, 30), new THREE.Euler(-Math.PI/2, 0, 0)));
+            coordinateSystem.add(createLabel('V', new THREE.Vector3(-planeDist + 0.1, 30, 30), new THREE.Euler(0, Math.PI/2, 0)));
+            coordinateSystem.add(createLabel('W', new THREE.Vector3(30, 30, -planeDist + 0.1)));
+        }
+
+        function setupUI() {
+            document.getElementById('shape-type').addEventListener('change', updateDimensionInputs);
+            document.getElementById('generate-btn').addEventListener('click', generateModelAndProjections);
+            document.getElementById('rotate-body-btn').addEventListener('click', toggleRotationMode);
+            renderer3D.domElement.addEventListener('mousedown', onMouseDown, false);
+            renderer3D.domElement.addEventListener('mousemove', onMouseMove, false);
+            renderer3D.domElement.addEventListener('mouseup', onMouseUp, false);
+            renderer3D.domElement.addEventListener('mouseout', onMouseUp, false);
+            document.getElementById('reset-view-btn').addEventListener('click', resetCameraView);
+        }
+
+        function updateDimensionInputs() {
+            const shape = document.getElementById('shape-type').value;
+            const container = document.getElementById('dimension-inputs');
+            let inputs = '';
+            switch(shape) {
+                case 'cylinder': inputs = `<div><label for="diameter">直径:</label><input type="number" id="diameter" value="40"></div><div><label for="height">高度:</label><input type="number" id="height" value="60"></div>`; break;
+                case 'cone': inputs = `<div><label for="diameter">底面直径:</label><input type="number" id="diameter" value="50"></div><div><label for="height">高度:</label><input type="number" id="height" value="70"></div>`; break;
+                case 'prism': inputs = `<div><label for="sides">面数 (3-16):</label><input type="number" id="sides" value="6" min="3" max="16"></div><div><label for="diameter">外接圆直径:</label><input type="number" id="diameter" value="40"></div><div><label for="height">高度:</label><input type="number" id="height" value="60"></div>`; break;
+                case 'pyramid': inputs = `<div><label for="sides">面数 (3-16):</label><input type="number" id="sides" value="4" min="3" max="16"></div><div><label for="diameter">外接圆直径:</label><input type="number" id="diameter" value="50"></div><div><label for="height">高度:</label><input type="number" id="height" value="70"></div>`; break;
+                case 'cuboid': inputs = `<div><label for="width">宽度 (X):</label><input type="number" id="width" value="60"></div><div><label for="height">高度 (Y):</label><input type="number" id="height" value="40"></div><div><label for="depth">深度 (Z):</label><input type="number" id="depth" value="50"></div>`; break;
+                case 'sphere': inputs = `<div><label for="diameter">直径:</label><input type="number" id="diameter" value="60"></div>`; break;
+                case 'frustum': inputs = `<div><label for="topDiameter">顶面直径:</label><input type="number" id="topDiameter" value="30"></div><div><label for="bottomDiameter">底面直径:</label><input type="number" id="bottomDiameter" value="60"></div><div><label for="height">高度:</label><input type="number" id="height" value="50"></div>`; break;
+                case 'pyramidFrustum': inputs = `<div><label for="sides">面数 (3-16):</label><input type="number" id="sides" value="4" min="3" max="16"></div><div><label for="topDiameter">顶面外接圆直径:</label><input type="number" id="topDiameter" value="30"></div><div><label for="bottomDiameter">底面外接圆直径:</label><input type="number" id="bottomDiameter" value="60"></div><div><label for="height">高度:</label><input type="number" id="height" value="50"></div>`; break;
+            }
+            container.innerHTML = inputs;
+        }
+
+        function generateModelAndProjections() {
+            clearScene();
+            const shape = document.getElementById('shape-type').value;
+            let geometry;
+            try {
+                const p = getParamsFromDOM();
+                switch(shape) {
+                    case 'cylinder': geometry = new THREE.CylinderGeometry(p.diameter/2, p.diameter/2, p.height, 64); break;
+                    case 'cone': geometry = new THREE.ConeGeometry(p.diameter/2, p.height, 64); break;
+                    case 'prism': geometry = new THREE.CylinderGeometry(p.diameter/2, p.diameter/2, p.height, p.sides); break;
+                    case 'pyramid': geometry = new THREE.ConeGeometry(p.diameter/2, p.height, p.sides); if(p.sides === 4) geometry.rotateY(Math.PI/4); break;
+                    case 'cuboid': geometry = new THREE.BoxGeometry(p.width, p.height, p.depth); break;
+                    case 'sphere': geometry = new THREE.SphereGeometry(p.diameter/2, 32, 16); break;
+                    case 'frustum': geometry = new THREE.CylinderGeometry(p.topDiameter/2, p.bottomDiameter/2, p.height, 64); break;
+                    case 'pyramidFrustum': geometry = new THREE.CylinderGeometry(p.topDiameter/2, p.bottomDiameter/2, p.height, p.sides); if(p.sides === 4) geometry.rotateY(Math.PI/4); break;
+                }
+            } catch(e) { alert("请输入有效的尺寸参数！"); return; }
+            
+            currentModelGroup = new THREE.Group();
+            const material = new THREE.MeshStandardMaterial({ color: 0x007bff, metalness: 0.1, roughness: 0.5 });
+            const mesh = new THREE.Mesh(geometry, material);
+            currentModelGroup.add(mesh);
+            
+            const polygonalShapes = ['cuboid', 'prism', 'pyramid', 'pyramidFrustum'];
+            if (polygonalShapes.includes(shape)) {
+                currentModelGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: 0x333333 })));
+            }
+            
+            scene3D.add(currentModelGroup);
+
+            generate3DProjections();
+            generate2DProjections();
+            
+            document.getElementById('rotate-body-btn').disabled = false;
+            document.getElementById('reset-view-btn').disabled = false;
+        }
+
+        function clearScene() {
+            if (currentModelGroup) { scene3D.remove(currentModelGroup); currentModelGroup = null; }
+            if (projectionsGroup2D) { scene2D.remove(projectionsGroup2D); projectionsGroup2D = null; }
+            if (projectionLinesGroup3D) { scene3D.remove(projectionLinesGroup3D); projectionLinesGroup3D = null; }
+        }
+
+        function generate3DProjections() {
+            if (!currentModelGroup) return;
+            if (projectionLinesGroup3D) scene3D.remove(projectionLinesGroup3D);
+            projectionLinesGroup3D = new THREE.Group();
+            
+            const shape = document.getElementById('shape-type').value;
+            const params = getParamsFromDOM();
+            
+            ['front', 'top', 'left'].forEach(viewType => {
+                const projectedEdges = getProjectedEdges(shape, params, viewType, true);
+                
+                projectedEdges.forEach(edge => {
+                    if (edge.projectionLines) {
+                        edge.projectionLines.forEach(line => {
+                            const projLine = new THREE.Line(
+                                new THREE.BufferGeometry().setFromPoints(line),
+                                projectionLineMaterial
+                            );
+                            projectionLinesGroup3D.add(projLine);
+                        });
+                    }
+                    
+                    const material = edge.visible ? projected3DSolidMaterial : projected3DDashedMaterial;
+                    const line = new THREE.Line(
+                        new THREE.BufferGeometry().setFromPoints([edge.start, edge.end]),
+                        material
+                    );
+                    if (!edge.visible) {
+                        line.computeLineDistances();
+                    }
+                    projectionLinesGroup3D.add(line);
+                });
+            });
+            
+            scene3D.add(projectionLinesGroup3D);
+        }
+
+        function isWorldSegmentVisible(p1_world, p2_world, viewType, modelMesh) {
+            const midPoint = p1_world.equals(p2_world) 
+                ? p1_world.clone()
+                : new THREE.Vector3().addVectors(p1_world, p2_world).multiplyScalar(0.5);
+
+            const viewDirection = new THREE.Vector3();
+            if (viewType === 'front') viewDirection.set(1, 0, 0);
+            if (viewType === 'top')   viewDirection.set(0, 1, 0);
+            if (viewType === 'left')  viewDirection.set(0, 0, 1);
+
+            const rayOrigin = midPoint.clone().add(viewDirection.clone().multiplyScalar(1000));
+            const rayDirection = viewDirection.clone().negate();
+
+            const raycaster = new THREE.Raycaster(rayOrigin, rayDirection);
+            const intersects = raycaster.intersectObject(modelMesh, true);
+
+            if (intersects.length === 0) {
+                return true; 
+            }
+
+            const hitDistance = intersects[0].distance;
+            return hitDistance >= 999.9;
+        }
+
+        function getProjectedEdges(shape, params, viewType, for3D = false) {
+            const edges = [];
+            const planeDist = 80;
+            const modelMatrix = currentModelGroup ? currentModelGroup.matrixWorld.clone() : new THREE.Matrix4();
+            const modelMesh = currentModelGroup.children[0];
+            
+            const projectPoint = (p_world) => {
+                if (for3D) {
+                    const p_proj = p_world.clone();
+                    if (viewType === 'front') p_proj.x = -planeDist;
+                    else if (viewType === 'top') p_proj.y = -planeDist;
+                    else p_proj.z = -planeDist;
+                    return p_proj;
+                } else {
+                    if (viewType === 'left') return new THREE.Vector3(p_world.x, p_world.y, 0); // V
+                    else if (viewType === 'top') return new THREE.Vector3(p_world.x, -p_world.z, 0); // H
+                    else if (viewType === 'front') return new THREE.Vector3(p_world.z, p_world.y, 0); // W
+                }
+            };
+
+            const addEdge = (p1_world, p2_world, visible) => {
+                const start = projectPoint(p1_world);
+                const end = projectPoint(p2_world);
+                const edge = { start, end, visible };
+                if (for3D) {
+                    edge.projectionLines = [[p1_world, start], [p2_world, end]];
+                }
+                edges.push(edge);
+            };
+
+            const viewVec = new THREE.Vector3();
+            if (viewType === 'front') viewVec.set(1, 0, 0);
+            if (viewType === 'top') viewVec.set(0, 1, 0);
+            if (viewType === 'left') viewVec.set(0, 0, 1);
+            
+            const curvedShapes = ['cylinder', 'cone', 'sphere', 'frustum'];
+            if (curvedShapes.includes(shape)) {
+                if (shape === 'sphere') {
+                    const radius = params.diameter / 2;
+                    const center_world = new THREE.Vector3().applyMatrix4(modelMatrix);
+                    const normal_world = viewVec.clone();
+                    let u = new THREE.Vector3().crossVectors(normal_world, new THREE.Vector3(0, 1, 0));
+                    if (u.length() < 0.01) u.crossVectors(normal_world, new THREE.Vector3(1, 0, 0));
+                    u.normalize();
+                    const v = new THREE.Vector3().crossVectors(normal_world, u).normalize();
+                    const segments = 64;
+                    let p1_world, p2_world;
+                    for (let i = 0; i <= segments; i++) {
+                        const angle = (i / segments) * Math.PI * 2;
+                        p2_world = center_world.clone()
+                            .add(u.clone().multiplyScalar(Math.cos(angle) * radius))
+                            .add(v.clone().multiplyScalar(Math.sin(angle) * radius));
+                        if (i > 0) addEdge(p1_world, p2_world, true);
+                        p1_world = p2_world;
+                    }
+                } else { // Cylinder, Cone, Frustum
+                    const segments = 64;
+                    const height = params.height;
+                    const topRadius = (shape === 'cone') ? 0 : (shape === 'frustum' ? params.topDiameter / 2 : params.diameter / 2);
+                    const bottomRadius = (shape === 'cone' || shape === 'cylinder') ? params.diameter / 2 : params.bottomDiameter / 2;
+                    
+                    const topCenter_local = new THREE.Vector3(0, height / 2, 0);
+                    const bottomCenter_local = new THREE.Vector3(0, -height / 2, 0);
+                    
+                    const projectCap = (center_local, radius) => {
+                        if (radius === 0) {
+                            const apex_world = center_local.clone().applyMatrix4(modelMatrix);
+                            const visible = isWorldSegmentVisible(apex_world, apex_world, viewType, modelMesh);
+                            addEdge(apex_world, apex_world, visible);
+                            return;
+                        }
+                        let p1_world, p2_world;
+                        for (let i = 0; i <= segments; i++) {
+                            const angle = (i / segments) * Math.PI * 2;
+                            const p_on_circle_local = new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+                            p2_world = center_local.clone().add(p_on_circle_local).applyMatrix4(modelMatrix);
+                            
+                            if (i > 0) {
+                                const is_segment_visible = isWorldSegmentVisible(p1_world, p2_world, viewType, modelMesh);
+                                addEdge(p1_world, p2_world, is_segment_visible);
+                            }
+                            p1_world = p2_world;
+                        }
+                    };
+
+                    projectCap(topCenter_local, topRadius);
+                    projectCap(bottomCenter_local, bottomRadius);
+
+                    const axis_world = topCenter_local.clone().applyMatrix4(modelMatrix).sub(bottomCenter_local.clone().applyMatrix4(modelMatrix)).normalize();
+                    const tangent_dir_world = new THREE.Vector3().crossVectors(axis_world, viewVec);
+                    
+                    if (tangent_dir_world.length() > 0.01) {
+                        tangent_dir_world.normalize();
+                        const p_top_1 = topCenter_local.clone().applyMatrix4(modelMatrix).add(tangent_dir_world.clone().multiplyScalar(topRadius));
+                        const p_bot_1 = bottomCenter_local.clone().applyMatrix4(modelMatrix).add(tangent_dir_world.clone().multiplyScalar(bottomRadius));
+                        const p_top_2 = topCenter_local.clone().applyMatrix4(modelMatrix).sub(tangent_dir_world.clone().multiplyScalar(topRadius));
+                        const p_bot_2 = bottomCenter_local.clone().applyMatrix4(modelMatrix).sub(tangent_dir_world.clone().multiplyScalar(bottomRadius));
+
+                        if (topRadius > 0 || bottomRadius > 0) {
+                            addEdge(p_bot_1, p_top_1, true);
+                            addEdge(p_bot_2, p_top_2, true);
+                        }
+                    }
+                }
+            } else { // Polygonal shapes
+                const geometry = modelMesh.geometry.clone();
+                geometry.applyMatrix4(modelMatrix);
+                
+                const edgesGeometry = new THREE.EdgesGeometry(geometry);
+                const vertices = edgesGeometry.attributes.position.array;
+                
+                const uniqueEdges = new Map();
+                for (let i = 0; i < vertices.length; i += 6) {
+                    const start = new THREE.Vector3(vertices[i], vertices[i+1], vertices[i+2]);
+                    const end = new THREE.Vector3(vertices[i+3], vertices[i+4], vertices[i+5]);
+                    const key = `${Math.round(start.x*100)},${Math.round(start.y*100)},${Math.round(start.z*100)}-${Math.round(end.x*100)},${Math.round(end.y*100)},${Math.round(end.z*100)}`;
+                    const reverseKey = `${Math.round(end.x*100)},${Math.round(end.y*100)},${Math.round(end.z*100)}-${Math.round(start.x*100)},${Math.round(start.y*100)},${Math.round(start.z*100)}`;
+                    if (!uniqueEdges.has(key) && !uniqueEdges.has(reverseKey)) {
+                        uniqueEdges.set(key, { start, end });
+                    }
+                }
+                
+                uniqueEdges.forEach(({ start, end }) => {
+                    const visible = isWorldSegmentVisible(start, end, viewType, modelMesh);
+                    addEdge(start, end, visible);
+                });
+            }
+            return edges;
+        }
+
+        function generate2DProjections() {
+            if (projectionsGroup2D) scene2D.remove(projectionsGroup2D);
+            projectionsGroup2D = new THREE.Group();
+            const shape = document.getElementById('shape-type').value;
+            const params = getParamsFromDOM();
+
+            const viewV = create2DProjectedView(shape, params, 'left');
+            const viewH = create2DProjectedView(shape, params, 'top');
+            const viewW = create2DProjectedView(shape, params, 'front');
+            
+            let frontView = viewW;
+            let topView = viewH;
+            let leftView = viewV;
+
+            frontView.scale.x = -1;
+            topView.rotation.z = -Math.PI / 2;
+            
+            const frontBbox = new THREE.Box3().setFromObject(frontView);
+            const topBbox = new THREE.Box3().setFromObject(topView);
+            const leftBbox = new THREE.Box3().setFromObject(leftView);
+            
+            const spacing = 40; 
+            
+            frontView.position.set(0, 0, 0);
+
+            const leftOffset_x = frontBbox.max.x - leftBbox.min.x + spacing;
+            const leftOffset_y = (frontBbox.min.y + frontBbox.max.y) / 2 - (leftBbox.min.y + leftBbox.max.y) / 2;
+            leftView.position.set(leftOffset_x, leftOffset_y, 0);
+
+            const topOffset_x = (frontBbox.min.x + frontBbox.max.x) / 2 - (topBbox.min.x + topBbox.max.x) / 2;
+            const topOffset_y = frontBbox.min.y - topBbox.max.y - spacing;
+            topView.position.set(topOffset_x, topOffset_y, 0);
+
+            projectionsGroup2D.add(frontView, topView, leftView);
+
+            // --- AUTO SCALING LOGIC ---
+            const groupBbox = new THREE.Box3().setFromObject(projectionsGroup2D);
+            const groupSize = groupBbox.getSize(new THREE.Vector3());
+
+            if (groupSize.x > 1e-6 && groupSize.y > 1e-6) {
+                const frustumSize2D = calculateOptimal2DFrustumSize();
+                const aspect2D = container2D.clientWidth / container2D.clientHeight;
+                const cameraViewWidth = frustumSize2D * aspect2D;
+                const cameraViewHeight = frustumSize2D;
+                
+                const padding = 0.9; // Use 90% of the viewport
+                const scaleX = (cameraViewWidth * padding) / groupSize.x;
+                const scaleY = (cameraViewHeight * padding) / groupSize.y;
+                const finalScale = Math.min(scaleX, scaleY);
+                
+                projectionsGroup2D.scale.set(finalScale, finalScale, finalScale);
+            }
+            // --- END OF AUTO SCALING LOGIC ---
+
+            const scaledGroupBbox = new THREE.Box3().setFromObject(projectionsGroup2D);
+            const groupCenter = scaledGroupBbox.getCenter(new THREE.Vector3());
+            projectionsGroup2D.position.sub(groupCenter);
+
+            scene2D.add(projectionsGroup2D);
+            
+            setTimeout(() => updateLabelPositions(), 100);
+        }
+
+        function create2DProjectedView(shape, params, viewType) {
+            const group = new THREE.Group();
+            const projectedEdges = getProjectedEdges(shape, params, viewType, false);
+            
+            projectedEdges.forEach(edge => {
+                const material = edge.visible ? solidLineMaterial : dashedLineMaterial;
+                const line = new THREE.Line(
+                    new THREE.BufferGeometry().setFromPoints([edge.start, edge.end]),
+                    material
+                );
+                
+                if (!edge.visible) {
+                    line.computeLineDistances();
+                }
+                group.add(line);
+            });
+            
+            const curvedShapes = ['cylinder', 'cone', 'sphere', 'frustum'];
+            if (curvedShapes.includes(shape)) {
+                 addCenterLines(group, shape, params, viewType);
+            }
+            
+            return group;
+        }
+
+        function addCenterLines(group, shape, params, viewType) {
+            const bbox = new THREE.Box3().setFromObject(group);
+            if (bbox.isEmpty()) return;
+            const size = bbox.getSize(new THREE.Vector3());
+            const center = bbox.getCenter(new THREE.Vector3());
+            
+            const extendSize = 15;
+            
+            const hLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(center.x - size.x/2 - extendSize, center.y, 0), 
+                new THREE.Vector3(center.x + size.x/2 + extendSize, center.y, 0)
+            ]), centerLineMaterial);
+            hLine.computeLineDistances();
+            group.add(hLine);
+            
+            const vLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(center.x, center.y - size.y/2 - extendSize, 0), 
+                new THREE.Vector3(center.x, center.y + size.y/2 + extendSize, 0)
+            ]), centerLineMaterial);
+            vLine.computeLineDistances();
+            group.add(vLine);
+        }
+
+        function getParamsFromDOM() {
+            const shape = document.getElementById('shape-type').value;
+            const p = {};
+            const val = (id) => parseFloat(document.getElementById(id).value);
+            switch(shape) {
+                case 'cylinder': case 'sphere': p.diameter = val('diameter'); if(shape !== 'sphere') p.height = val('height'); break;
+                case 'cone': p.diameter = val('diameter'); p.height = val('height'); break;
+                case 'prism': case 'pyramid': p.sides = parseInt(val('sides')); p.diameter = val('diameter'); p.height = val('height'); break;
+                case 'cuboid': p.width = val('width'); p.height = val('height'); p.depth = val('depth'); break;
+                case 'frustum': p.topDiameter = val('topDiameter'); p.bottomDiameter = val('bottomDiameter'); p.height = val('height'); break;
+                case 'pyramidFrustum': p.sides = parseInt(val('sides')); p.topDiameter = val('topDiameter'); p.bottomDiameter = val('bottomDiameter'); p.height = val('height'); break;
+            }
+            return p;
+        }
+
+        function toggleRotationMode() {
+            isModelOnlyRotation = !isModelOnlyRotation;
+            const btn = document.getElementById('rotate-body-btn');
+            controls3D.enabled = !isModelOnlyRotation;
+            btn.textContent = isModelOnlyRotation ? '切换到"旋转场景"模式' : '切换到"仅旋转物体"模式';
+            btn.style.backgroundColor = isModelOnlyRotation ? '#28a745' : '#6c757d';
+        }
+
+        function onMouseDown(e) { 
+            if (isModelOnlyRotation && currentModelGroup) { 
+                modelDragControls.isDragging = true; 
+                modelDragControls.previousMousePosition.x = e.clientX; 
+                modelDragControls.previousMousePosition.y = e.clientY; 
+            } 
+        }
+        
+        function onMouseMove(e) {
+            if (isModelOnlyRotation && modelDragControls.isDragging && currentModelGroup) {
+                const delta = { x: e.clientX - modelDragControls.previousMousePosition.x, y: e.clientY - modelDragControls.previousMousePosition.y };
+                const rotQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(delta.y * 0.005, delta.x * 0.005, 0, 'XYZ'));
+                currentModelGroup.quaternion.multiplyQuaternions(rotQuat, currentModelGroup.quaternion);
+                modelDragControls.previousMousePosition.x = e.clientX; 
+                modelDragControls.previousMousePosition.y = e.clientY;
+                
+                generate3DProjections();
+                generate2DProjections();
+                render();
+            }
+        }
+        
+        function onMouseUp() { 
+            modelDragControls.isDragging = false; 
+        }
+
+        function resetCameraView() {
+            controls3D.reset();
+            if (currentModelGroup) {
+                currentModelGroup.rotation.set(0, 0, 0);
+                currentModelGroup.quaternion.set(0, 0, 0, 1);
+                generate3DProjections();
+                generate2DProjections();
+            }
+        }
+
+        function animate() { requestAnimationFrame(animate); render(); }
+        function render() { renderer3D.render(scene3D, camera3D); renderer2D.render(scene2D, camera2D); }
+
+        window.addEventListener('resize', () => {
+            updateRendererSizes();
+        }, false);
+
+        init();
+    </script>
+</body>
+</html>
